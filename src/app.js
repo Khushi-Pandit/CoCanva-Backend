@@ -4,12 +4,12 @@ const PORT = 3000;
 const connectDB = require('./config/db');
 require("dotenv").config();
 
-// const router = require('./routes');
+const userRouter = require('./routes/user.routes');
 
 connectDB();
 
 app.use(express.json());
 
-// app.use('/', router);
+app.use('/api/v1/user', userRouter);
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
