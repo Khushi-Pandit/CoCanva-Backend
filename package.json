@@ -1,12 +1,21 @@
 {
+  "name": "canva-clone-backend",
+  "version": "1.0.0",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "build": "echo \"No build step required\""
+  },
   "dependencies": {
     "cors": "^2.8.6",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
-    "firebase": "^12.8.0",
-    "firebase-admin": "^13.6.0",
-    "mongoose": "^9.1.5",
-    "node": "^25.5.0",
-    "nodejs": "^0.0.0"
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "firebase-admin": "^11.11.1",
+    "mongoose": "^8.0.0",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
   }
 }
