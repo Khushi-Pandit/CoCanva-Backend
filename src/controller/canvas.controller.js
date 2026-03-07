@@ -1,13 +1,12 @@
-const Canvas = require('../controller/canvas.controller.js');
+const Canvas = require('../models/canvas.model');
 const crypto = require('crypto');
 
-// GET /api/v1/canvas/my  — All canvases for logged-in user
+// GET /api/v1/canvas/my
 exports.getMyCanvases = async (req, res) => {
   try {
     const canvases = await Canvas.find({ owner: req.user._id })
       .select('title thumbnail createdAt updatedAt collaborators isPublic')
       .sort({ updatedAt: -1 });
-
     res.json({ canvases });
   } catch (err) {
     console.error('getMyCanvases:', err);
@@ -15,14 +14,11 @@ exports.getMyCanvases = async (req, res) => {
   }
 };
 
-// POST /api/v1/canvas/create  — Create new canvas
+// POST /api/v1/canvas/create
 exports.createCanvas = async (req, res) => {
   try {
     const { title } = req.body;
-    const canvas = new Canvas({
-      title: title || 'Untitled Canvas',
-      owner: req.user._id,
-    });
+    const canvas = new Canvas({ title: title || 'Untitled Canvas', owner: req.user._id });
     await canvas.save();
     res.status(201).json({ canvas });
   } catch (err) {
@@ -31,20 +27,17 @@ exports.createCanvas = async (req, res) => {
   }
 };
 
-// GET /api/v1/canvas/:canvasId  — Get single canvas
+// GET /api/v1/canvas/:canvasId
 exports.getCanvas = async (req, res) => {
   try {
-    const { canvasId } = req.params;
-    const canvas = await Canvas.findById(canvasId)
+    const canvas = await Canvas.findById(req.params.canvasId)
       .populate('owner', 'fullName email avatarId')
       .populate('collaborators.user', 'fullName email avatarId');
 
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
 
-    const isOwner = canvas.owner._id.toString() === req.user._id.toString();
-    const isCollaborator = canvas.collaborators.some(
-      (c) => c.user?._id.toString() === req.user._id.toString()
-    );
+    const isOwner        = canvas.owner._id.toString() === req.user._id.toString();
+    const isCollaborator = canvas.collaborators.some(c => c.user?._id.toString() === req.user._id.toString());
 
     if (!canvas.isPublic && !isOwner && !isCollaborator) {
       return res.status(403).json({ message: 'Access denied' });
@@ -57,31 +50,27 @@ exports.getCanvas = async (req, res) => {
   }
 };
 
-// DELETE /api/v1/canvas/:canvasId  — Delete canvas (owner only)
+// DELETE /api/v1/canvas/:canvasId
 exports.deleteCanvas = async (req, res) => {
   try {
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
-
     if (canvas.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only owner can delete' });
     }
-
     await canvas.deleteOne();
     res.json({ message: 'Canvas deleted' });
   } catch (err) {
-    console.error('deleteCanvas:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
 
-// PATCH /api/v1/canvas/:canvasId/title  — Rename canvas
+// PATCH /api/v1/canvas/:canvasId/title
 exports.updateTitle = async (req, res) => {
   try {
-    const { title } = req.body;
     const canvas = await Canvas.findOneAndUpdate(
       { _id: req.params.canvasId, owner: req.user._id },
-      { title },
+      { title: req.body.title },
       { new: true }
     );
     if (!canvas) return res.status(404).json({ message: 'Canvas not found or not owner' });
@@ -91,8 +80,9 @@ exports.updateTitle = async (req, res) => {
   }
 };
 
-// POST /api/v1/canvas/:canvasId/share  — Generate share link
-exports.generateShareLink = async (req, res) => {
+// POST /api/v1/canvas/:canvasId/share
+// Body: { roles: ['viewer','editor','voice'] }  — generate links for requested roles
+exports.generateShareLinks = async (req, res) => {
   try {
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
@@ -100,48 +90,61 @@ exports.generateShareLink = async (req, res) => {
       return res.status(403).json({ message: 'Only owner can share' });
     }
 
-    const token = crypto.randomBytes(16).toString('hex');
-    canvas.shareToken = token;
+    const roles = req.body.roles || ['viewer', 'editor', 'voice'];
+    const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    // Generate a token for each role if it doesn't exist yet
+    for (const role of roles) {
+      const exists = canvas.shareTokens.find(t => t.role === role);
+      if (!exists) {
+        canvas.shareTokens.push({ token: crypto.randomBytes(16).toString('hex'), role });
+      }
+    }
+
     canvas.isPublic = true;
     await canvas.save();
 
-    const shareUrl = `${process.env.FRONTEND_URL}/canvas/shared/${token}`;
-    res.json({ shareUrl, token });
+    // Return { viewer: url, editor: url, voice: url }
+    const links = {};
+    canvas.shareTokens.forEach(({ token, role }) => {
+      links[role] = `${FRONTEND_URL}/canvas/join/${token}`;
+    });
+
+    res.json({ links });
   } catch (err) {
+    console.error('generateShareLinks:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
 
-// GET /api/v1/canvas/shared/:token  — Access shared canvas (no auth)
-exports.getSharedCanvas = async (req, res) => {
+// GET /api/v1/canvas/join/:token  — resolve token → canvasId + role (requires login)
+exports.resolveShareToken = async (req, res) => {
   try {
-    const canvas = await Canvas.findOne({ shareToken: req.params.token });
-    if (!canvas || !canvas.isPublic) {
-      return res.status(404).json({ message: 'Shared canvas not found' });
-    }
-    res.json({ canvas });
+    const canvas = await Canvas.findOne({ 'shareTokens.token': req.params.token });
+    if (!canvas) return res.status(404).json({ message: 'Invalid or expired link' });
+
+    const entry = canvas.shareTokens.find(t => t.token === req.params.token);
+    res.json({ canvasId: canvas._id, role: entry.role, title: canvas.title });
   } catch (err) {
     res.status(500).json({ message: 'Internal server error' });
   }
 };
 
-// POST /api/v1/canvas/:canvasId/collaborator  — Add collaborator
+// POST /api/v1/canvas/:canvasId/collaborator
 exports.addCollaborator = async (req, res) => {
   try {
     const { userId, role } = req.body;
     const canvas = await Canvas.findById(req.params.canvasId);
-
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
     if (canvas.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only owner can add collaborators' });
     }
 
-    const already = canvas.collaborators.some((c) => c.user?.toString() === userId);
+    const already = canvas.collaborators.some(c => c.user?.toString() === userId);
     if (already) return res.status(400).json({ message: 'User already a collaborator' });
 
-    canvas.collaborators.push({ user: userId, role: role || 'editor' });
+    canvas.collaborators.push({ user: userId, role: role || 'viewer' });
     await canvas.save();
-
     res.json({ message: 'Collaborator added', canvas });
   } catch (err) {
     res.status(500).json({ message: 'Internal server error' });
@@ -156,19 +159,17 @@ exports.removeCollaborator = async (req, res) => {
     if (canvas.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only owner can remove collaborators' });
     }
-
     canvas.collaborators = canvas.collaborators.filter(
-      (c) => c.user?.toString() !== req.params.userId
+      c => c.user?.toString() !== req.params.userId
     );
     await canvas.save();
-
     res.json({ message: 'Collaborator removed' });
   } catch (err) {
     res.status(500).json({ message: 'Internal server error' });
   }
 };
 
-// POST /api/v1/canvas/:canvasId/save  — Save full canvas state (fallback / manual save)
+// POST /api/v1/canvas/:canvasId/save
 exports.saveCanvasState = async (req, res) => {
   try {
     const { elements, viewport } = req.body;

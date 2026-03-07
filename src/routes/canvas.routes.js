@@ -2,19 +2,24 @@ const router = require('express').Router();
 const { verifyFirebaseToken } = require('../middleware/auth.middleware');
 const ctrl = require('../controller/canvas.controller');
 
-// All routes require auth except shared link
-router.get('/shared/:token', ctrl.getSharedCanvas);
-
 router.use(verifyFirebaseToken);
 
-router.get('/my', ctrl.getMyCanvases);
-router.post('/create', ctrl.createCanvas);
-router.get('/:canvasId', ctrl.getCanvas);
-router.delete('/:canvasId', ctrl.deleteCanvas);
-router.patch('/:canvasId/title', ctrl.updateTitle);
-router.post('/:canvasId/share', ctrl.generateShareLink);
-router.post('/:canvasId/collaborator', ctrl.addCollaborator);
+// Dashboard routes
+router.get('/',                                ctrl.getMyCanvases);      // list all my canvases
+router.post('/',                               ctrl.createCanvas);       // create new canvas
+
+// Share token resolution
+router.get('/join/:token',                     ctrl.resolveShareToken);
+
+// Canvas CRUD
+router.get('/:canvasId',                       ctrl.getCanvas);
+router.put('/:canvasId',                       ctrl.updateTitle);        // rename (PUT body: {title})
+router.delete('/:canvasId',                    ctrl.deleteCanvas);
+
+// Canvas actions
+router.post('/:canvasId/share',                ctrl.generateShareLinks);
+router.post('/:canvasId/save',                 ctrl.saveCanvasState);
+router.post('/:canvasId/collaborator',         ctrl.addCollaborator);
 router.delete('/:canvasId/collaborator/:userId', ctrl.removeCollaborator);
-router.post('/:canvasId/save', ctrl.saveCanvasState);
 
 module.exports = router;
