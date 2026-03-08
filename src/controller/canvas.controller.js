@@ -1,7 +1,7 @@
 const Canvas = require('../models/canvas.model');
 const crypto = require('crypto');
 
-// GET /api/v1/canvas/my
+// GET /api/v1/canvas
 exports.getMyCanvases = async (req, res) => {
   try {
     const canvases = await Canvas.find({ owner: req.user._id })
@@ -14,11 +14,14 @@ exports.getMyCanvases = async (req, res) => {
   }
 };
 
-// POST /api/v1/canvas/create
+// POST /api/v1/canvas
 exports.createCanvas = async (req, res) => {
   try {
     const { title } = req.body;
-    const canvas = new Canvas({ title: title || 'Untitled Canvas', owner: req.user._id });
+    const canvas = new Canvas({
+      title: title || 'Untitled Canvas',
+      owner: req.user._id,
+    });
     await canvas.save();
     res.status(201).json({ canvas });
   } catch (err) {
@@ -28,6 +31,7 @@ exports.createCanvas = async (req, res) => {
 };
 
 // GET /api/v1/canvas/:canvasId
+// Accepts optional x-share-token header to resolve role for share-link users
 exports.getCanvas = async (req, res) => {
   try {
     const canvas = await Canvas.findById(req.params.canvasId)
@@ -36,14 +40,32 @@ exports.getCanvas = async (req, res) => {
 
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
 
-    const isOwner        = canvas.owner._id.toString() === req.user._id.toString();
-    const isCollaborator = canvas.collaborators.some(c => c.user?._id.toString() === req.user._id.toString());
+    const isOwner      = canvas.owner._id.toString() === req.user._id.toString();
+    const collaborator = canvas.collaborators.find(
+      c => c.user?._id.toString() === req.user._id.toString()
+    );
 
-    if (!canvas.isPublic && !isOwner && !isCollaborator) {
-      return res.status(403).json({ message: 'Access denied' });
+    // Check if user arrived via a share token (sent as x-share-token header by frontend)
+    const shareTokenHeader = req.headers['x-share-token'];
+    let shareTokenRole = null;
+    if (shareTokenHeader) {
+      const entry = canvas.shareTokens.find(t => t.token === shareTokenHeader);
+      if (entry) shareTokenRole = entry.role;
     }
 
-    res.json({ canvas });
+    // Access check: owner OR collaborator OR valid share token
+    const hasAccess = isOwner || !!collaborator || !!shareTokenRole;
+    if (!hasAccess) {
+      return res.status(403).json({ message: 'Access denied. You need an invite link to view this canvas.' });
+    }
+
+    // Determine role — priority: owner > collaborator > shareToken
+    let userRole = 'viewer';
+    if (isOwner)             userRole = 'owner';
+    else if (collaborator)   userRole = collaborator.role;
+    else if (shareTokenRole) userRole = shareTokenRole;
+
+    res.json({ canvas, userRole });
   } catch (err) {
     console.error('getCanvas:', err);
     res.status(500).json({ message: 'Internal server error' });
@@ -65,7 +87,7 @@ exports.deleteCanvas = async (req, res) => {
   }
 };
 
-// PATCH /api/v1/canvas/:canvasId/title
+// PUT /api/v1/canvas/:canvasId
 exports.updateTitle = async (req, res) => {
   try {
     const canvas = await Canvas.findOneAndUpdate(
@@ -81,7 +103,7 @@ exports.updateTitle = async (req, res) => {
 };
 
 // POST /api/v1/canvas/:canvasId/share
-// Body: { roles: ['viewer','editor','voice'] }  — generate links for requested roles
+// Generates per-role invite links. Only owner can call this.
 exports.generateShareLinks = async (req, res) => {
   try {
     const canvas = await Canvas.findById(req.params.canvasId);
@@ -93,22 +115,23 @@ exports.generateShareLinks = async (req, res) => {
     const roles = req.body.roles || ['viewer', 'editor', 'voice'];
     const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-    // Generate a token for each role if it doesn't exist yet
+    // Generate token per role if not already existing
     for (const role of roles) {
       const exists = canvas.shareTokens.find(t => t.role === role);
       if (!exists) {
         canvas.shareTokens.push({ token: crypto.randomBytes(16).toString('hex'), role });
       }
     }
-
-    canvas.isPublic = true;
     await canvas.save();
 
-    // Return { viewer: url, editor: url, voice: url }
+    // Return share links in /canvas/join/:token format
+    // This is the ONLY way to get access — direct /canvas/:id will 403 without a token
     const links = {};
-    canvas.shareTokens.forEach(({ token, role }) => {
-      links[role] = `${FRONTEND_URL}/canvas/join/${token}`;
-    });
+    canvas.shareTokens
+      .filter(t => roles.includes(t.role))
+      .forEach(({ token, role }) => {
+        links[role] = `${FRONTEND_URL}/canvas/join/${token}`;
+      });
 
     res.json({ links });
   } catch (err) {
@@ -117,7 +140,8 @@ exports.generateShareLinks = async (req, res) => {
   }
 };
 
-// GET /api/v1/canvas/join/:token  — resolve token → canvasId + role (requires login)
+// GET /api/v1/canvas/join/:token
+// Resolves share token → canvasId + role. Login required (enforced by middleware).
 exports.resolveShareToken = async (req, res) => {
   try {
     const canvas = await Canvas.findOne({ 'shareTokens.token': req.params.token });
@@ -139,10 +163,8 @@ exports.addCollaborator = async (req, res) => {
     if (canvas.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only owner can add collaborators' });
     }
-
     const already = canvas.collaborators.some(c => c.user?.toString() === userId);
-    if (already) return res.status(400).json({ message: 'User already a collaborator' });
-
+    if (already) return res.status(400).json({ message: 'Already a collaborator' });
     canvas.collaborators.push({ user: userId, role: role || 'viewer' });
     await canvas.save();
     res.json({ message: 'Collaborator added', canvas });

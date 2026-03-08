@@ -6,7 +6,6 @@ const collaboratorSchema = new Schema({
   role: { type: String, enum: ['viewer', 'editor', 'voice'], default: 'viewer' },
 }, { _id: false });
 
-// One token per permission level
 const shareTokenSchema = new Schema({
   token: { type: String, required: true },
   role:  { type: String, enum: ['viewer', 'editor', 'voice'], required: true },
@@ -32,9 +31,13 @@ const canvasSchema = new Schema({
   collaborators: [collaboratorSchema],
   elements:      [elementSchema],
   isPublic:      { type: Boolean, default: false },
-  shareTokens:   [shareTokenSchema], // per-role tokens
+  shareTokens:   [shareTokenSchema],
   thumbnail:     { type: String, default: null },
-  viewport:      { x: { type: Number, default: 0 }, y: { type: Number, default: 0 }, zoom: { type: Number, default: 1 } },
+  viewport: {
+    x:    { type: Number, default: 0 },
+    y:    { type: Number, default: 0 },
+    zoom: { type: Number, default: 1 },
+  },
 }, { timestamps: true });
 
 canvasSchema.index({ owner: 1, createdAt: -1 });
