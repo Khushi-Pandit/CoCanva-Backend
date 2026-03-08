@@ -28,7 +28,12 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true,
 }));
+
 app.use(express.json({ limit: '10mb' }));
+
+// sendBeacon() sends Content-Type: text/plain with JSON body on page unload
+// This parser handles those requests in the /save endpoint
+app.use(express.text({ type: 'text/plain' }));
 
 // REST Routes
 app.use('/api/v1/user', userRouter);
