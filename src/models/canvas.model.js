@@ -1,5 +1,6 @@
+// FILE: src/models/canvas.model.js
 const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
+const Schema   = mongoose.Schema;
 
 const collaboratorSchema = new Schema({
   user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -13,16 +14,51 @@ const shareTokenSchema = new Schema({
 
 const elementSchema = new Schema({
   elementId:  { type: String, required: true },
-  kind:       { type: String, enum: ['stroke', 'shape', 'text'], required: true },
+  kind:       { type: String, enum: ['stroke', 'shape', 'text', 'flowchart'], required: true },
+
+  // ── Stroke fields ──────────────────────────────────────────────────────────
   strokeType: { type: String, enum: ['pen', 'marker', 'pencil', 'brush', 'eraser'] },
   points:     [{ x: Number, y: Number }],
-  shapeType:  { type: String, enum: ['rectangle', 'circle', 'triangle', 'line', 'arrow', 'diamond'] },
+
+  // ── Shape / Flowchart fields ───────────────────────────────────────────────
+  shapeType: {
+    type: String,
+    enum: [
+      // Basic shapes
+      'rectangle', 'circle', 'triangle', 'line', 'arrow',
+      // Flowchart shapes
+      'diamond',       // decision
+      'parallelogram', // input/output
+      'cylinder',      // database
+      'rounded_rect',  // process (start/end)
+      'hexagon',       // preparation
+      'connector',     // line with arrow
+    ],
+  },
+
   x: Number, y: Number, width: Number, height: Number,
   rotation:   { type: Number, default: 0 },
-  text: String, fontSize: Number, fontFamily: String,
-  color: String, fillColor: String, strokeWidth: Number,
-  opacity:    { type: Number, default: 1 },
-  timestamp:  Number,
+
+  // ── Text / Label (inside shapes) ──────────────────────────────────────────
+  text:       String,
+  label:      String,   // label inside flowchart shapes
+  fontSize:   Number,
+  fontFamily: String,
+  textAlign:  { type: String, enum: ['left', 'center', 'right'], default: 'center' },
+
+  // ── Style ─────────────────────────────────────────────────────────────────
+  color:       String,
+  fillColor:   String,
+  strokeWidth: Number,
+  opacity:     { type: Number, default: 1 },
+  dashed:      { type: Boolean, default: false },  // for connector lines
+  arrowEnd:    { type: Boolean, default: true  },  // arrow at end of connector
+
+  // ── Flowchart connector endpoints ─────────────────────────────────────────
+  fromId: String,  // elementId of source shape
+  toId:   String,  // elementId of target shape
+
+  timestamp: Number,
 }, { _id: false });
 
 const canvasSchema = new Schema({
@@ -42,5 +78,6 @@ const canvasSchema = new Schema({
 
 canvasSchema.index({ owner: 1, createdAt: -1 });
 canvasSchema.index({ 'shareTokens.token': 1 });
+canvasSchema.index({ 'collaborators.user': 1 }); // ← for getSharedWithMe query
 
 module.exports = mongoose.model('Canvas', canvasSchema);

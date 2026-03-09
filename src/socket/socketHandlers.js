@@ -1,4 +1,5 @@
 // FILE: src/socket/socketHandlers.js
+// UPDATED: improved reconnect handling, viewport sync, undo tracking
 
 const Canvas        = require('../models/canvas.model');
 const ActiveSession = require('../models/activeSession.model');
@@ -17,7 +18,6 @@ const verifyUser = async (token) => {
   catch { return null; }
 };
 
-// owner + editor + voice can mutate canvas
 const canEdit = (role) => role === 'owner' || role === 'editor' || role === 'voice';
 
 const registerSocketHandlers = (io) => {
@@ -50,15 +50,18 @@ const registerSocketHandlers = (io) => {
         }
 
         const hasAccess = isOwner || !!collaborator || !!shareTokenRole;
-        if (!hasAccess) {
-          socket.emit('error', { message: 'Access denied. Ask the owner for an invite link.' });
-          return;
-        }
+        if (!hasAccess) { socket.emit('error', { message: 'Access denied.' }); return; }
 
         let effectiveRole = 'viewer';
         if (isOwner)             effectiveRole = 'owner';
         else if (collaborator)   effectiveRole = collaborator.role;
         else if (shareTokenRole) effectiveRole = shareTokenRole;
+
+        // Auto-add collaborator if joined via share token
+        if (!isOwner && !collaborator && shareTokenRole) {
+          canvas.collaborators.push({ user: socket.user.uid, role: shareTokenRole });
+          await canvas.save().catch(() => {});
+        }
 
         socket.join(canvasId);
         socket.currentCanvasId = canvasId;
@@ -66,10 +69,8 @@ const registerSocketHandlers = (io) => {
 
         const userColor    = getNextColor();
         const resolvedName = userName || socket.user.name || 'Anonymous';
-
-        // Store on socket for cursor:move / stroke:drawing enrichment
-        socket.userName  = resolvedName;
-        socket.userColor = userColor;
+        socket.userName    = resolvedName;
+        socket.userColor   = userColor;
 
         await ActiveSession.findOneAndUpdate(
           { socketId: socket.id },
@@ -80,16 +81,24 @@ const registerSocketHandlers = (io) => {
           { upsert: true, new: true }
         );
 
-        // Send current canvas state to joining user
-        socket.emit('canvas:state', { elements: canvas.elements, viewport: canvas.viewport });
-        socket.emit('canvas:role',  { role: effectiveRole });
+        // Send full canvas state to the joining user
+        socket.emit('canvas:state', {
+          elements: canvas.elements,
+          viewport: canvas.viewport,
+        });
+        socket.emit('canvas:role', { role: effectiveRole });
 
-        // Send active users list (with socketId so frontend can build userInfoMap)
+        // Broadcast updated user list to EVERYONE in the room
         const activeSessions = await ActiveSession.find({ canvasId });
-        socket.emit('users:active', activeSessions.map(s => ({
-          userId: s.userId, userName: s.userName, userColor: s.userColor,
-          role: s.role, socketId: s.socketId, cursor: s.cursor,
-        })));
+        const usersList = activeSessions.map(s => ({
+          userId:    s.userId,
+          userName:  s.userName,
+          userColor: s.userColor,
+          role:      s.role,
+          socketId:  s.socketId,
+          cursor:    s.cursor,
+        }));
+        io.to(canvasId).emit('users:active', usersList);
 
         // Notify others
         socket.to(canvasId).emit('user:joined', {
@@ -97,7 +106,7 @@ const registerSocketHandlers = (io) => {
           userColor, socketId: socket.id, role: effectiveRole,
         });
 
-        console.log(`User ${socket.user.uid} joined canvas ${canvasId} as ${effectiveRole}`);
+        console.log(`User ${resolvedName} joined canvas ${canvasId} as ${effectiveRole}`);
       } catch (err) {
         console.error('canvas:join error:', err);
         socket.emit('error', { message: 'Failed to join canvas' });
@@ -105,14 +114,16 @@ const registerSocketHandlers = (io) => {
     });
 
     // ── ELEMENT ADD ──────────────────────────────────────────────────────────
-    // Broadcast to ALL in room (including viewers) so they see new elements
     socket.on('element:add', async ({ canvasId, element }) => {
       if (!canEdit(socket.userRole)) return;
       try {
-        // Broadcast to everyone else in the room (viewers included)
-        socket.to(canvasId).emit('element:add', { element, userId: socket.user.uid });
-        // Persist to DB
-        await Canvas.findByIdAndUpdate(canvasId, { $push: { elements: element } });
+        // Tag element with creator so frontend can do per-user undo
+        const taggedElement = { ...element, createdBy: socket.user.uid };
+        socket.to(canvasId).emit('element:add', { element: taggedElement, userId: socket.user.uid });
+        await Canvas.findByIdAndUpdate(canvasId, {
+          $push: { elements: taggedElement },
+          updatedAt: new Date(),
+        });
       } catch (err) { console.error('element:add error:', err); }
     });
 
@@ -121,7 +132,10 @@ const registerSocketHandlers = (io) => {
       if (!canEdit(socket.userRole)) return;
       try {
         socket.to(canvasId).emit('element:delete', { elementId, userId: socket.user.uid });
-        await Canvas.findByIdAndUpdate(canvasId, { $pull: { elements: { elementId } } });
+        await Canvas.findByIdAndUpdate(canvasId, {
+          $pull: { elements: { elementId } },
+          updatedAt: new Date(),
+        });
       } catch (err) { console.error('element:delete error:', err); }
     });
 
@@ -132,7 +146,7 @@ const registerSocketHandlers = (io) => {
         socket.to(canvasId).emit('element:modify', { element, userId: socket.user.uid });
         await Canvas.findOneAndUpdate(
           { _id: canvasId, 'elements.elementId': element.elementId },
-          { $set: { 'elements.$': element } }
+          { $set: { 'elements.$': element, updatedAt: new Date() } }
         );
       } catch (err) { console.error('element:modify error:', err); }
     });
@@ -141,29 +155,26 @@ const registerSocketHandlers = (io) => {
     socket.on('canvas:clear', async ({ canvasId }) => {
       if (!canEdit(socket.userRole)) return;
       try {
-        socket.to(canvasId).emit('canvas:clear', { userId: socket.user.uid });
-        await Canvas.findByIdAndUpdate(canvasId, { $set: { elements: [] } });
+        io.to(canvasId).emit('canvas:clear', { userId: socket.user.uid });
+        await Canvas.findByIdAndUpdate(canvasId, {
+          $set: { elements: [], updatedAt: new Date() },
+        });
       } catch (err) { console.error('canvas:clear error:', err); }
     });
 
-    // ── CANVAS SAVE (from frontend auto-save / manual save) ──────────────────
-    // When one user explicitly saves, optionally notify others that state is fresh
+    // ── CANVAS SAVE ──────────────────────────────────────────────────────────
     socket.on('canvas:save', async ({ canvasId, elements, viewport }) => {
       if (!canEdit(socket.userRole)) return;
       try {
-        await Canvas.findByIdAndUpdate(
-          canvasId,
-          { elements, viewport },
-          { new: true }
-        );
-        // Optionally tell others the canvas was just saved (useful for "last saved" indicators)
-        socket.to(canvasId).emit('canvas:saved', { userId: socket.user.uid, savedAt: new Date() });
-        socket.emit('canvas:saved', { userId: socket.user.uid, savedAt: new Date() });
+        await Canvas.findByIdAndUpdate(canvasId, { elements, viewport, updatedAt: new Date() }, { new: true });
+        const savedAt = new Date();
+        socket.to(canvasId).emit('canvas:saved', { userId: socket.user.uid, savedAt });
+        socket.emit('canvas:saved', { userId: socket.user.uid, savedAt });
       } catch (err) { console.error('canvas:save error:', err); }
     });
 
     // ── CURSOR MOVE ──────────────────────────────────────────────────────────
-    socket.on('cursor:move', async ({ canvasId, x, y }) => {
+    socket.on('cursor:move', ({ canvasId, x, y }) => {
       socket.to(canvasId).emit('cursor:move', {
         userId:    socket.user.uid,
         socketId:  socket.id,
@@ -171,7 +182,7 @@ const registerSocketHandlers = (io) => {
         userColor: socket.userColor || '#3B82F6',
         x, y,
       });
-      // Fire-and-forget DB update (no await — don't block emit)
+      // Fire-and-forget cursor update
       ActiveSession.findOneAndUpdate(
         { socketId: socket.id },
         { cursor: { x, y }, lastSeen: new Date() }
@@ -190,19 +201,12 @@ const registerSocketHandlers = (io) => {
       });
     });
 
-    // ── VOICE SIGNALS ────────────────────────────────────────────────────────
-    socket.on('voice:signal', ({ targetSocketId, signal }) => {
-      if (socket.userRole === 'viewer') return;
-      io.to(targetSocketId).emit('voice:signal', { fromSocketId: socket.id, signal });
-    });
-
-    socket.on('voice:join', ({ canvasId }) => {
-      if (socket.userRole === 'viewer') return;
-      socket.to(canvasId).emit('voice:user-joined', { socketId: socket.id, userId: socket.user.uid });
-    });
-
-    socket.on('voice:leave', ({ canvasId }) => {
-      socket.to(canvasId).emit('voice:user-left', { socketId: socket.id });
+    // ── VIEWPORT SYNC (optional: sync viewport for pair sessions) ────────────
+    socket.on('viewport:sync', ({ canvasId, viewport }) => {
+      socket.to(canvasId).emit('viewport:sync', {
+        userId:   socket.user.uid,
+        viewport,
+      });
     });
 
     // ── DISCONNECT ───────────────────────────────────────────────────────────
@@ -211,8 +215,14 @@ const registerSocketHandlers = (io) => {
         const session = await ActiveSession.findOneAndDelete({ socketId: socket.id });
         if (session?.canvasId) {
           const roomId = session.canvasId.toString();
-          socket.to(roomId).emit('user:left',       { userId: session.userId, socketId: socket.id });
-          socket.to(roomId).emit('voice:user-left', { socketId: socket.id });
+          const remaining = await ActiveSession.find({ canvasId: roomId });
+          io.to(roomId).emit('users:active', remaining.map(s => ({
+            userId: s.userId, userName: s.userName, userColor: s.userColor,
+            role: s.role, socketId: s.socketId,
+          })));
+          socket.to(roomId).emit('user:left', {
+            userId: session.userId, socketId: socket.id,
+          });
         }
         console.log(`Socket disconnected: ${socket.id}`);
       } catch (err) { console.error('disconnect error:', err); }
