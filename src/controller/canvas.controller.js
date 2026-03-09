@@ -1,11 +1,26 @@
 // FILE: src/controller/canvas.controller.js
 const Canvas = require('../models/canvas.model');
+const User   = require('../models/user.model');
 const crypto = require('crypto');
 
-// GET /api/v1/canvas  — canvases owned by me
+// ── Helper: get MongoDB User _id from Firebase UID ───────────────────────────
+// BUG FIX: req.user is the decoded Firebase token — req.user.uid is the
+// Firebase UID string. But canvas.owner and canvas.collaborators[].user store
+// the MongoDB User._id (ObjectId). We must look up the User document first.
+// Previously all isOwner checks were comparing ObjectId vs Firebase UID string
+// which ALWAYS returned false, so every authenticated user got 403 Access Denied
+// unless they happened to have a share token.
+const getMongoUser = async (firebaseUid) => {
+  return User.findOne({ firebaseUid }).select('_id').lean();
+};
+
+// GET /api/v1/canvas
 exports.getMyCanvases = async (req, res) => {
   try {
-    const canvases = await Canvas.find({ owner: req.user._id })
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(404).json({ message: 'User not found' });
+
+    const canvases = await Canvas.find({ owner: mongoUser._id })
       .select('title thumbnail createdAt updatedAt collaborators isPublic')
       .sort({ updatedAt: -1 });
     res.json({ canvases });
@@ -15,31 +30,32 @@ exports.getMyCanvases = async (req, res) => {
   }
 };
 
-// ── TASK 5: GET /api/v1/canvas/shared ─────────────────────────────────────────
-// Returns all canvases where I am a collaborator (NOT owner)
+// GET /api/v1/canvas/shared
 exports.getSharedWithMe = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(404).json({ message: 'User not found' });
+
     const canvases = await Canvas.find({
-      'collaborators.user': req.user._id,
-      owner: { $ne: req.user._id },   // exclude canvases I own
+      'collaborators.user': mongoUser._id,
+      owner: { $ne: mongoUser._id },
     })
       .populate('owner', 'fullName email avatarId')
       .select('title thumbnail createdAt updatedAt collaborators owner isPublic')
       .sort({ updatedAt: -1 });
 
-    // Attach my role for each canvas
     const result = canvases.map((c) => {
       const collab = c.collaborators.find(
-        (col) => col.user?.toString() === req.user._id.toString()
+        (col) => col.user?.toString() === mongoUser._id.toString()
       );
       return {
-        _id:          c._id,
-        title:        c.title,
-        thumbnail:    c.thumbnail,
-        createdAt:    c.createdAt,
-        updatedAt:    c.updatedAt,
-        isPublic:     c.isPublic,
-        myRole:       collab?.role || 'viewer',
+        _id:       c._id,
+        title:     c.title,
+        thumbnail: c.thumbnail,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+        isPublic:  c.isPublic,
+        myRole:    collab?.role || 'viewer',
         owner: {
           _id:      c.owner._id,
           fullName: c.owner.fullName,
@@ -59,10 +75,12 @@ exports.getSharedWithMe = async (req, res) => {
 // POST /api/v1/canvas
 exports.createCanvas = async (req, res) => {
   try {
-    const { title } = req.body;
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(404).json({ message: 'User not found' });
+
     const canvas = new Canvas({
-      title: title || 'Untitled Canvas',
-      owner: req.user._id,
+      title: req.body.title || 'Untitled Canvas',
+      owner: mongoUser._id,
     });
     await canvas.save();
     res.status(201).json({ canvas });
@@ -75,17 +93,21 @@ exports.createCanvas = async (req, res) => {
 // GET /api/v1/canvas/:canvasId
 exports.getCanvas = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     const canvas = await Canvas.findById(req.params.canvasId)
       .populate('owner', 'fullName email avatarId')
       .populate('collaborators.user', 'fullName email avatarId');
 
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
 
-    const isOwner      = canvas.owner._id.toString() === req.user._id.toString();
+    const isOwner      = canvas.owner._id.toString() === mongoUser._id.toString();
     const collaborator = canvas.collaborators.find(
-      (c) => c.user?._id.toString() === req.user._id.toString()
+      (c) => c.user?._id.toString() === mongoUser._id.toString()
     );
 
+    // Check share token from header
     const shareTokenHeader = req.headers['x-share-token'];
     let shareTokenRole = null;
     if (shareTokenHeader) {
@@ -95,7 +117,7 @@ exports.getCanvas = async (req, res) => {
 
     const hasAccess = isOwner || !!collaborator || !!shareTokenRole;
     if (!hasAccess) {
-      return res.status(403).json({ message: 'Access denied. You need an invite link.' });
+      return res.status(403).json({ message: 'Access denied. Ask the owner for an invite link.' });
     }
 
     let userRole = 'viewer';
@@ -103,9 +125,9 @@ exports.getCanvas = async (req, res) => {
     else if (collaborator)   userRole = collaborator.role;
     else if (shareTokenRole) userRole = shareTokenRole;
 
-    // ── TASK 5: if user joined via share token, auto-add as collaborator ─────
+    // Auto-add as collaborator if first access via share token
     if (!isOwner && !collaborator && shareTokenRole) {
-      canvas.collaborators.push({ user: req.user._id, role: shareTokenRole });
+      canvas.collaborators.push({ user: mongoUser._id, role: shareTokenRole });
       await canvas.save();
     }
 
@@ -119,10 +141,13 @@ exports.getCanvas = async (req, res) => {
 // DELETE /api/v1/canvas/:canvasId
 exports.deleteCanvas = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
-    if (canvas.owner.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Only owner can delete' });
+    if (canvas.owner.toString() !== mongoUser._id.toString()) {
+      return res.status(403).json({ message: 'Only the owner can delete this canvas' });
     }
     await canvas.deleteOne();
     res.json({ message: 'Canvas deleted' });
@@ -134,8 +159,11 @@ exports.deleteCanvas = async (req, res) => {
 // PUT /api/v1/canvas/:canvasId
 exports.updateTitle = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     const canvas = await Canvas.findOneAndUpdate(
-      { _id: req.params.canvasId, owner: req.user._id },
+      { _id: req.params.canvasId, owner: mongoUser._id },
       { title: req.body.title },
       { new: true }
     );
@@ -149,10 +177,13 @@ exports.updateTitle = async (req, res) => {
 // POST /api/v1/canvas/:canvasId/share
 exports.generateShareLinks = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
-    if (canvas.owner.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Only owner can share' });
+    if (canvas.owner.toString() !== mongoUser._id.toString()) {
+      return res.status(403).json({ message: 'Only the owner can share this canvas' });
     }
 
     const roles        = req.body.roles || ['viewer', 'editor', 'voice'];
@@ -180,10 +211,11 @@ exports.generateShareLinks = async (req, res) => {
   }
 };
 
-// GET /api/v1/canvas/join/:token
+// GET /api/v1/canvas/join/:token  — PUBLIC, no auth required
 exports.resolveShareToken = async (req, res) => {
   try {
-    const canvas = await Canvas.findOne({ 'shareTokens.token': req.params.token });
+    const canvas = await Canvas.findOne({ 'shareTokens.token': req.params.token })
+      .select('_id title shareTokens');
     if (!canvas) return res.status(404).json({ message: 'Invalid or expired link' });
     const entry = canvas.shareTokens.find((t) => t.token === req.params.token);
     res.json({ canvasId: canvas._id, role: entry.role, title: canvas.title });
@@ -195,11 +227,14 @@ exports.resolveShareToken = async (req, res) => {
 // POST /api/v1/canvas/:canvasId/collaborator
 exports.addCollaborator = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     const { userId, role } = req.body;
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
-    if (canvas.owner.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Only owner can add collaborators' });
+    if (canvas.owner.toString() !== mongoUser._id.toString()) {
+      return res.status(403).json({ message: 'Only the owner can add collaborators' });
     }
     if (canvas.collaborators.some((c) => c.user?.toString() === userId)) {
       return res.status(400).json({ message: 'Already a collaborator' });
@@ -215,10 +250,13 @@ exports.addCollaborator = async (req, res) => {
 // DELETE /api/v1/canvas/:canvasId/collaborator/:userId
 exports.removeCollaborator = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
-    if (canvas.owner.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Only owner can remove collaborators' });
+    if (canvas.owner.toString() !== mongoUser._id.toString()) {
+      return res.status(403).json({ message: 'Only the owner can remove collaborators' });
     }
     canvas.collaborators = canvas.collaborators.filter(
       (c) => c.user?.toString() !== req.params.userId
@@ -233,15 +271,13 @@ exports.removeCollaborator = async (req, res) => {
 // POST /api/v1/canvas/:canvasId/save
 exports.saveCanvasState = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     let elements, viewport;
     if (typeof req.body === 'string') {
-      try {
-        const parsed = JSON.parse(req.body);
-        elements = parsed.elements;
-        viewport = parsed.viewport;
-      } catch {
-        return res.status(400).json({ message: 'Invalid body' });
-      }
+      try { ({ elements, viewport } = JSON.parse(req.body)); }
+      catch { return res.status(400).json({ message: 'Invalid body' }); }
     } else {
       elements = req.body.elements;
       viewport = req.body.viewport;
@@ -250,12 +286,11 @@ exports.saveCanvasState = async (req, res) => {
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
 
-    const isOwner      = canvas.owner.toString() === req.user._id.toString();
+    const isOwner      = canvas.owner.toString() === mongoUser._id.toString();
     const collaborator = canvas.collaborators.find(
-      (c) => c.user?.toString() === req.user._id.toString()
+      (c) => c.user?.toString() === mongoUser._id.toString()
     );
-    const canSave =
-      isOwner || (collaborator && ['editor', 'voice'].includes(collaborator.role));
+    const canSave = isOwner || (collaborator && ['editor', 'voice'].includes(collaborator.role));
     if (!canSave) return res.status(403).json({ message: 'No permission to save' });
 
     const updated = await Canvas.findByIdAndUpdate(
@@ -270,16 +305,18 @@ exports.saveCanvasState = async (req, res) => {
   }
 };
 
-// ── TASK 2: POST /api/v1/canvas/:canvasId/ai-summary ─────────────────────────
-// Generates AI summary of canvas elements
+// POST /api/v1/canvas/:canvasId/ai-summary
 exports.getAISummary = async (req, res) => {
   try {
+    const mongoUser = await getMongoUser(req.user.uid);
+    if (!mongoUser) return res.status(403).json({ message: 'User not found' });
+
     const canvas = await Canvas.findById(req.params.canvasId);
     if (!canvas) return res.status(404).json({ message: 'Canvas not found' });
 
-    const isOwner      = canvas.owner.toString() === req.user._id.toString();
+    const isOwner      = canvas.owner.toString() === mongoUser._id.toString();
     const collaborator = canvas.collaborators.find(
-      (c) => c.user?.toString() === req.user._id.toString()
+      (c) => c.user?.toString() === mongoUser._id.toString()
     );
     if (!isOwner && !collaborator) {
       return res.status(403).json({ message: 'Access denied' });
@@ -290,20 +327,12 @@ exports.getAISummary = async (req, res) => {
       return res.json({ summary: 'Canvas is empty — nothing to summarize yet.' });
     }
 
-    // Build a structured description for Anthropic API
     const counts = { stroke: 0, shape: 0, text: 0 };
-    const texts  = [];
-    const shapes = [];
-
+    const texts = [], shapes = [];
     elements.forEach((el) => {
       if (el.kind === 'stroke') counts.stroke++;
-      else if (el.kind === 'shape') {
-        counts.shape++;
-        shapes.push(`${el.shapeType || 'shape'}`);
-      } else if (el.kind === 'text') {
-        counts.text++;
-        if (el.text) texts.push(el.text.trim().slice(0, 120));
-      }
+      else if (el.kind === 'shape') { counts.shape++; shapes.push(el.shapeType || 'shape'); }
+      else if (el.kind === 'text')  { counts.text++;  if (el.text) texts.push(el.text.trim().slice(0, 120)); }
     });
 
     const description = [
@@ -314,12 +343,10 @@ exports.getAISummary = async (req, res) => {
       texts.length  > 0 ? `Text content: ${texts.join(' | ')}` : '',
     ].filter(Boolean).join('\n');
 
-    // Call Anthropic API
     const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
     if (!ANTHROPIC_API_KEY) {
-      // Fallback summary without AI
       return res.json({
-        summary: `This canvas contains ${elements.length} element(s): ${counts.stroke} drawing stroke(s), ${counts.shape} shape(s), and ${counts.text} text block(s).${texts.length > 0 ? ` Key text: "${texts.slice(0, 3).join('", "')}"` : ''}`,
+        summary: `This canvas contains ${elements.length} element(s): ${counts.stroke} stroke(s), ${counts.shape} shape(s), ${counts.text} text block(s).`,
         generated: false,
       });
     }
@@ -327,53 +354,43 @@ exports.getAISummary = async (req, res) => {
     const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         ANTHROPIC_API_KEY,
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model:      'claude-3-haiku-20240307',
+        model: 'claude-3-haiku-20240307',
         max_tokens: 300,
         messages: [{
-          role:    'user',
-          content: `You are summarizing a collaborative whiteboard canvas. Based on the following element breakdown, write a clear 2-3 sentence summary of what this canvas appears to contain or represent. Be concise and insightful.\n\n${description}`,
+          role: 'user',
+          content: `Summarize this collaborative whiteboard in 2-3 sentences:\n\n${description}`,
         }],
       }),
     });
 
     if (!aiRes.ok) throw new Error('AI API error');
     const aiData = await aiRes.json();
-    const summary = aiData.content?.[0]?.text || 'Could not generate summary.';
-
-    res.json({ summary, generated: true });
+    res.json({ summary: aiData.content?.[0]?.text || 'Could not generate summary.', generated: true });
   } catch (err) {
     console.error('getAISummary:', err);
     res.status(500).json({ message: 'Failed to generate summary' });
   }
 };
 
-// ── TASK 2b: POST /api/v1/canvas/:canvasId/ai-stroke ──────────────────────
-// AI Pencil — interprets a stroke description and suggests what user meant
+// POST /api/v1/canvas/:canvasId/ai-stroke
 exports.getAIStrokeSuggestion = async (req, res) => {
   try {
     const { strokeDescription } = req.body;
     if (!strokeDescription) return res.json({ suggestion: null });
-
-    const { isClosed, aspectRatio, width, height, pointCount } = strokeDescription;
-
-    // Rule-based fast path (no API needed for obvious cases)
+    const { isClosed, aspectRatio, width, height } = strokeDescription;
     if (isClosed) {
-      if (aspectRatio > 0.7 && aspectRatio < 1.4) return res.json({ suggestion: 'Circle — use the circle flowchart tool for a clean shape' });
-      if (aspectRatio > 0.4 && aspectRatio < 2.5) {
-        if (Math.abs(aspectRatio - 1) < 0.5) return res.json({ suggestion: 'Diamond (Decision) — press Tab to accept ghost shape' });
-        return res.json({ suggestion: 'Rectangle (Process) — press Tab to accept ghost shape' });
-      }
+      if (aspectRatio > 0.7 && aspectRatio < 1.4) return res.json({ suggestion: 'Circle — use the circle flowchart tool' });
+      if (Math.abs(aspectRatio - 1) < 0.5)        return res.json({ suggestion: 'Diamond (Decision) — press Tab to accept' });
+      return res.json({ suggestion: 'Rectangle (Process) — press Tab to accept' });
     } else {
-      if (width < 20 && height < 20) return res.json({ suggestion: null }); // too small
-      return res.json({ suggestion: 'Line/Connector — use connector tool to link flowchart shapes' });
+      if (width < 20 && height < 20) return res.json({ suggestion: null });
+      return res.json({ suggestion: 'Line/Connector — use the connector tool' });
     }
-
-    res.json({ suggestion: null });
   } catch (err) {
     console.error('getAIStrokeSuggestion:', err);
     res.json({ suggestion: null });
