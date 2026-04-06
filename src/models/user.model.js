@@ -1,16 +1,16 @@
-const mongoose = require("mongoose");
-const Schema = mongoose.Schema;
+'use strict';
+const mongoose = require('mongoose');
 
-// FIX: Added fId (Firebase UID) — auth.middleware does User.findOne({ fId: decoded.uid })
-// Without this field, ALL authenticated requests fail with 401 "User not found"
-const userSchema = new Schema(
+const userSchema = new mongoose.Schema(
   {
-    fId: { type: String, required: true, unique: true }, // Firebase UID — CRITICAL
-    fullName: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
-    avatarId: { type: Number, default: 0 },
+    fId:      { type: String, required: true, unique: true, index: true }, // Firebase UID
+    email:    { type: String, required: true, unique: true, lowercase: true, trim: true },
+    fullName: { type: String, required: true, trim: true, maxlength: 120 },
+    avatarUrl:{ type: String, default: null },   // URL to avatar image
+    avatarId: { type: Number, default: 0 },       // numeric avatar index (legacy)
+    isActive: { type: Boolean, default: true },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
-module.exports = mongoose.model("User", userSchema);
+module.exports = mongoose.model('User', userSchema);
