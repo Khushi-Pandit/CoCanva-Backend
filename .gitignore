@@ -1,4 +1,4 @@
-node_modules
+node_modules/
+dist/
 .env
-.env.local
-firebaseServiceAccountKey.json
+DrawSync_API.postman_collection.json
