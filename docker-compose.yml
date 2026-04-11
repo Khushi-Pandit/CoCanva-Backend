@@ -1,0 +1,67 @@
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      target: builder
+    command: npm run dev
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      MONGO_URL: mongodb://mongo:27017/drawsync
+      REDIS_URL: redis://redis:6379
+      FRONTEND_URL: http://localhost:3000
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    depends_on:
+      - redis
+    profiles:
+      - debug
+
+volumes:
+  mongo_data:
+  redis_data:
