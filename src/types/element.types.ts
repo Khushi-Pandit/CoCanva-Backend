@@ -34,6 +34,8 @@ export interface ICanvasElement {
   elementId: string;         // UUID from client
   type: ElementType;
   subtype: string;
+  shapeType: string;
+  borderRadius: number;
 
   // Spatial
   x: number;
@@ -99,6 +101,7 @@ export interface ICanvasElement {
   isGhostSuggestion: boolean;
   aiConfidence: number;
   aiReasoning: string;
+  isFlowchartEl: boolean;
 
   // State
   isDeleted: boolean;
@@ -116,17 +119,17 @@ export interface ICanvasElement {
 export type ElementPatch = Partial<Omit<ICanvasElement, '_id' | 'canvasId' | 'elementId' | 'createdBy' | 'createdAt'>>;
 
 export const CANVAS_ELEMENT_ALLOWED_FIELDS = new Set<string>([
-  'elementId', 'type', 'subtype', 'x', 'y', 'width', 'height', 'rotation',
+  'elementId', 'type', 'subtype', 'shapeType', 'x', 'y', 'width', 'height', 'rotation',
   'points', 'fromElementId', 'toElementId', 'fromAnchor', 'toAnchor',
   'fromPoint', 'toPoint', 'waypoints', 'controlPoints', 'routingAlgorithm',
   'text', 'label', 'fontSize', 'fontFamily', 'fontWeight', 'fontStyle',
   'textAlign', 'textColor', 'lineHeight', 'letterSpacing',
   'strokeColor', 'fillColor', 'strokeWidth', 'opacity',
-  'dashed', 'dashArray', 'roughness', 'roundness', 'shadow',
+  'dashed', 'dashArray', 'roughness', 'roundness', 'borderRadius', 'shadow',
   'arrowStart', 'arrowEnd', 'arrowHeadStyle', 'arrowTailStyle',
   'imageUrl', 'widgetType', 'widgetData',
   'zIndex', 'groupId', 'frameId',
-  'isGhostSuggestion', 'aiConfidence', 'aiReasoning',
+  'isGhostSuggestion', 'aiConfidence', 'aiReasoning', 'isFlowchartEl',
   'isDeleted', 'isLocked', 'isPinned',
   'updatedBy', 'version',
 ]);

@@ -25,6 +25,7 @@ const canvasElementSchema = new Schema<ICanvasElementDocument>(
       required: true,
     },
     subtype: { type: String, default: '' },
+    shapeType: { type: String, default: 'rectangle' },
 
     // Spatial
     x: { type: Number, default: 0 },
@@ -80,6 +81,7 @@ const canvasElementSchema = new Schema<ICanvasElementDocument>(
     dashArray: { type: [Number], default: [] },
     roughness: { type: Number, default: 0 },
     roundness: { type: Number, default: 0 },
+    borderRadius: { type: Number, default: 0 },
     shadow: { type: shadowSchema, default: null },
 
     // Arrow
@@ -110,6 +112,7 @@ const canvasElementSchema = new Schema<ICanvasElementDocument>(
     isGhostSuggestion: { type: Boolean, default: false },
     aiConfidence: { type: Number, default: 0 },
     aiReasoning: { type: String, default: '' },
+    isFlowchartEl: { type: Boolean, default: false },
 
     // State
     isDeleted: { type: Boolean, default: false },
