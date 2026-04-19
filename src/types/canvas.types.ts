@@ -74,6 +74,9 @@ export type CanvasCategory =
   | 'erd'
   | 'other';
 
+export type CanvasType = 'drawing' | 'notes' | 'diagram';
+export type PageSize = 'a4' | 'letter' | 'a3' | 'a5' | 'custom';
+
 export interface ICanvas {
   _id: Types.ObjectId;
   title: string;
@@ -95,6 +98,10 @@ export interface ICanvas {
   forkOf: Types.ObjectId | null;
   forkSnapshotId: Types.ObjectId | null;
   settings: ICanvasSettings;
+  canvasType: CanvasType;
+  pageSize: PageSize;
+  pageOrientation: 'portrait' | 'landscape';
+  pageCount: number;
   archivedAt: Date | null;
   deletedAt: Date | null;
   createdAt: Date;

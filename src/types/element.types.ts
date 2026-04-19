@@ -36,6 +36,7 @@ export interface ICanvasElement {
   subtype: string;
   shapeType: string;
   borderRadius: number;
+  pageIndex: number;
 
   // Spatial
   x: number;
@@ -119,7 +120,7 @@ export interface ICanvasElement {
 export type ElementPatch = Partial<Omit<ICanvasElement, '_id' | 'canvasId' | 'elementId' | 'createdBy' | 'createdAt'>>;
 
 export const CANVAS_ELEMENT_ALLOWED_FIELDS = new Set<string>([
-  'elementId', 'type', 'subtype', 'shapeType', 'x', 'y', 'width', 'height', 'rotation',
+  'elementId', 'type', 'subtype', 'shapeType', 'pageIndex', 'x', 'y', 'width', 'height', 'rotation',
   'points', 'fromElementId', 'toElementId', 'fromAnchor', 'toAnchor',
   'fromPoint', 'toPoint', 'waypoints', 'controlPoints', 'routingAlgorithm',
   'text', 'label', 'fontSize', 'fontFamily', 'fontWeight', 'fontStyle',
