@@ -38,6 +38,9 @@ export class CanvasService {
       category?: CanvasCategory;
       settings?: Partial<ICanvas['settings']>;
       templateId?: string;
+      canvasType?: 'drawing' | 'notes' | 'diagram';
+      pageSize?: string;
+      pageOrientation?: string;
     },
   ): Promise<ICanvasDocument> {
     const canvas = await CanvasModel.create({
@@ -45,6 +48,9 @@ export class CanvasService {
       category: data.category ?? 'other',
       owner: userId,
       settings: data.settings ?? {},
+      canvasType: data.canvasType ?? 'drawing',
+      pageSize: data.pageSize ?? 'a4',
+      pageOrientation: data.pageOrientation ?? 'portrait',
     });
 
     // Create default branch
