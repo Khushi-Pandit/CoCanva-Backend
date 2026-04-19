@@ -102,6 +102,7 @@ export interface ICanvas {
   pageSize: PageSize;
   pageOrientation: 'portrait' | 'landscape';
   pageCount: number;
+  pageTranscripts?: Map<string, string>;
   archivedAt: Date | null;
   deletedAt: Date | null;
   createdAt: Date;

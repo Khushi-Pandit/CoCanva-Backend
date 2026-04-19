@@ -1,6 +1,7 @@
 import { Server, Socket } from 'socket.io';
 import { voiceRoomManager } from '../rooms/VoiceRoomManager';
 import { SocketData } from '../../types/socket.types';
+import { CanvasModel } from '../../models/canvas.model';
 import { logger } from '../../utils/logger';
 
 type AuthSocket = Socket & { data: SocketData };
@@ -114,5 +115,36 @@ export function registerVoiceHandler(io: Server, socket: AuthSocket): void {
       userId: socket.data.userId,
       x, y, zoom,
     });
+  });
+
+  // ── voice:transcript_chunk ─────────────────────────────────────────────────
+  socket.on('voice:transcript_chunk', async ({ canvasId, pageIndex, transcript, userName }: {
+    canvasId: string;
+    pageIndex: number;
+    transcript: string;
+    userName: string;
+  }) => {
+    if (!transcript?.trim()) return;
+    try {
+      const canvas = await CanvasModel.findById(canvasId);
+      if (!canvas) return;
+
+      const pIdx = String(pageIndex);
+      if (!canvas.pageTranscripts) {
+        canvas.pageTranscripts = new Map<string, string>();
+      }
+      
+      const existing = canvas.pageTranscripts.get(pIdx) || '';
+      const separator = existing ? '\n' : '';
+      const formatted = `${existing}${separator}[${userName}]: ${transcript.trim()}`;
+
+      canvas.pageTranscripts.set(pIdx, formatted);
+      canvas.markModified('pageTranscripts');
+      await canvas.save();
+      
+      logger.debug('Saved transcript chunk to DB', { canvasId, pageIndex, length: transcript.length });
+    } catch (e) {
+      logger.error('Failed to save transcript chunk', { error: (e as Error).message });
+    }
   });
 }

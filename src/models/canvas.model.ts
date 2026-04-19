@@ -79,6 +79,7 @@ const canvasSchema = new Schema<ICanvasDocument>(
     pageSize: { type: String, enum: ['a4', 'letter', 'a3', 'a5', 'custom'], default: 'a4' },
     pageOrientation: { type: String, enum: ['portrait', 'landscape'], default: 'portrait' },
     pageCount: { type: Number, default: 1 },
+    pageTranscripts: { type: Map, of: String, default: {} },
     archivedAt: { type: Date, default: null },
     deletedAt: { type: Date, default: null },
   },

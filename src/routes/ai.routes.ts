@@ -20,6 +20,7 @@ router.post('/canvases/:id/ai/suggest-next', requireAuth, aiRateLimit, requireCa
 // Legacy endpoints (kept for compatibility)
 router.post('/canvases/:id/ai/chat', requireAuth, aiRateLimit, (req, res, next) => aiController.chat(req as any, res, next));
 router.post('/canvases/:id/ai/summarize', requireAuth, aiRateLimit, (req, res, next) => aiController.summarize(req as any, res, next));
+router.post('/canvases/:id/ai/summarize-notes-page', requireAuth, aiRateLimit, (req, res, next) => aiController.summarizeNotesPage(req as any, res, next));
 router.post('/canvases/:id/ai/suggest', requireAuth, aiRateLimit, requireCanvasRole('viewer'), (req, res, next) => aiController.ghostSuggest(req as any, res, next));
 router.post('/canvases/:id/ai/layout', requireAuth, requireCanvasRole('editor'), (req, res, next) => aiController.autoLayout(req as any, res, next));
 router.post('/canvases/:id/ai/code-to-diagram', requireAuth, aiRateLimit, requireCanvasRole('editor'), (req, res, next) => aiController.codeToDiagram(req as any, res, next));

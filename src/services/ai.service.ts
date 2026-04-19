@@ -15,6 +15,7 @@ import {
   streamChat as providerStreamChat,
   complete,
   completeJSON,
+  completeVision,
   getAvailableProviders,
   logProviderStatus,
 } from './ai.providers';
@@ -112,6 +113,8 @@ export class AIService {
     elements: ICanvasElement[],
     selectedIds: string[] = [],
     requestedModel = 'auto',
+    contextType: 'canvas' | 'notes' = 'canvas',
+    transcript = ''
   ): Promise<AgentChatResponse> {
     const available = getAvailableProviders();
     if (available.length === 0) {
@@ -124,7 +127,27 @@ export class AIService {
     const originY = maxY > 0 ? maxY + 80 : 100;
     const originX = 100;
 
-    const systemPrompt = `You are DrawSync AI Agent — an intelligent creative partner embedded in a collaborative canvas tool.
+    let systemPrompt = '';
+
+    if (contextType === 'notes') {
+      systemPrompt = `You are a highly intelligent, wide-thinking Learning and Study Assistant.
+You are helping the user study, understand concepts, and answer questions.
+You have access to the user's current canvas state and a live transcript of the lecture/voice room.
+
+TRANSCRIPT:
+${transcript || 'No transcript available yet.'}
+
+CANVAS ELEMENTS:
+${compactElements || 'Canvas is empty.'}
+
+BEHAVIOR RULES:
+1. Provide rich, conceptual, and thorough explanations. You are not just a canvas drawing bot; you are a broad learning assistant.
+2. NEVER use developer-facing phrases like "According to the transcript..." or "Based on the canvas elements...". Just answer naturally.
+3. Answer questions directly with markdown formatting (bullet points, bold text).
+4. ONLY generate shapes or diagrams (via actions) if the user explicitly asks you to "draw", "plan", "create a diagram", or "flowchart" something. Otherwise, leave the actions array empty.
+5. Do not hallucinate content; rely on the user's message and the provided context.`;
+    } else {
+      systemPrompt = `You are DrawSync AI Agent — an intelligent creative partner embedded in a collaborative canvas tool.
 You can SEE and MODIFY the canvas. Your job is to help users design, draw, and build diagrams.
 
 CURRENT CANVAS STATE:
@@ -145,11 +168,13 @@ COLOR PALETTE:
 - Start/End rounded_rect: color:"#059669" fillColor:"#d1fae5"
 - Database/cylinder: color:"#0891b2" fillColor:"#cffafe"
 - I/O parallelogram: color:"#7c3aed" fillColor:"#ede9fe"
-- Connector: color:"#6b7280" fillColor:"transparent"
+- Connector: color:"#6b7280" fillColor:"transparent"`;
+    }
 
+    const formatAndRules = `
 RESPONSE FORMAT — return ONLY this JSON, no markdown fences, no extra text:
 {
-  "message": "Human-readable explanation of what you did",
+  "message": "Your conversational response in markdown (if notes) or human-readable explanation (if drawing)",
   "actions": [
     {
       "type": "add_elements",
@@ -170,7 +195,7 @@ RESPONSE FORMAT — return ONLY this JSON, no markdown fences, no extra text:
   ]
 }
 
-RULES:
+JSON RULES:
 1. Draw/create/generate requests → use add_elements with proper shapes AND connectors between sequential steps
 2. Modify/change requests → use modify_elements with elementId + patch
 3. Delete/remove requests → use delete_elements with elementIds
@@ -179,6 +204,8 @@ RULES:
 6. Always add connectors between sequential flow steps (shapeType:"connector" with fromId/toId)
 7. Stack vertically: increment Y by 120px per step, same X column
 8. Return ONLY valid JSON — no text before {, no text after }`;
+
+    systemPrompt += '\n\n' + formatAndRules;
 
     const historyStr = history.slice(-6).map(h => `${h.role.toUpperCase()}: ${h.content}`).join('\n');
     const fullPrompt = historyStr
@@ -389,6 +416,32 @@ Be concise, precise, and helpful. When suggesting diagram changes, describe them
     if (available.length === 0) return 'No AI providers configured.';
     const provider = pickProvider('annotation');
     return await complete(provider, `Canvas annotation thread:\nContext: ${threadContext}\nComment: ${annotationText}\nSuggest a brief resolution (2-3 sentences max).`, 300);
+  }
+
+  // ── Notes Page Multimodal Summarization ───────────────────────────────────
+  async summarizeNotesPage(imageData: string, transcript: string, title: string): Promise<string> {
+    const available = getAvailableProviders();
+    // Prefer Claude for vision, then Gemini, then anything else
+    const provider = available.includes('claude') ? 'claude' 
+                   : available.includes('gemini') ? 'gemini' 
+                   : available[0];
+
+    if (!provider) return 'No AI providers configured.';
+
+    const prompt = `You are a highly intelligent study assistant analyzing a page of handwritten notes and its corresponding audio transcript.
+Title: ${title}
+Audio Transcript:
+"${transcript || '(No transcript provided)'}"
+
+Task: Look at the image of the handwritten/drawn notes. Read the text, understand the diagrams, and synthesize it WITH the provided audio transcript.
+Provide a clear, well-structured markdown summary of the core concepts on this page. Use bullet points and bold text where appropriate. Keep it concise but comprehensive.`;
+
+    try {
+      return await completeVision(provider, prompt, imageData, 'image/png', 2048);
+    } catch (e) {
+      logger.error('summarizeNotesPage failed', { error: (e as Error).message });
+      return 'Failed to generate summary from the image and transcript. Ensure your AI provider supports Vision.';
+    }
   }
 
   getAvailable() { return getAvailableProviders(); }

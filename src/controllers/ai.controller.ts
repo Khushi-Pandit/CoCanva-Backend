@@ -17,7 +17,7 @@ export class AIController {
   // ── Agent Chat (new primary endpoint) ─────────────────────────────────────
   async agentChat(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { message, history = [], model = 'auto', elements: clientElements = [], selectedElementIds = [] } = req.body as any;
+      const { message, history = [], model = 'auto', elements: clientElements = [], selectedElementIds = [], contextType = 'canvas', pageIndex = 0 } = req.body as any;
       if (!message?.trim()) { res.status(400).json({ error: 'message is required' }); return; }
 
       // Use client-sent elements (already serialized) as the canvas context
@@ -26,12 +26,21 @@ export class AIController {
         ? clientElements   // Trust client for speed
         : await elementService.getElements(pid(req));
 
+      let transcript = '';
+      if (contextType === 'notes') {
+        const canvas = await CanvasModel.findById(pid(req)).select('pageTranscripts').lean();
+        // @ts-ignore - lean() returns plain object, bypass Map wrapper
+        transcript = canvas?.pageTranscripts?.[String(pageIndex)] || '';
+      }
+
       const result = await aiService.agentChat(
         String(message),
         history,
         dbElements,
         selectedElementIds,
         model,
+        contextType,
+        transcript
       );
 
       res.json(result);
@@ -97,6 +106,22 @@ export class AIController {
       const elements = await elementService.getElements(pid(req));
       const canvas = await CanvasModel.findById(pid(req)).select('title').lean();
       const summary = await aiService.summarize(elements, canvas?.title ?? 'Canvas');
+      res.json({ summary });
+    } catch (err) { next(err); }
+  }
+
+  async summarizeNotesPage(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { imageData, pageIndex = 0 } = req.body as { imageData: string; pageIndex: number };
+      if (!imageData) {
+        res.status(400).json({ error: 'imageData is required' });
+        return;
+      }
+      const canvas = await CanvasModel.findById(pid(req)).select('title pageTranscripts').lean();
+      // @ts-ignore - lean() returns plain object, bypass Map wrapper
+      const transcript = canvas?.pageTranscripts?.[String(pageIndex)] || '';
+
+      const summary = await aiService.summarizeNotesPage(imageData, transcript, canvas?.title ?? 'Notes');
       res.json({ summary });
     } catch (err) { next(err); }
   }

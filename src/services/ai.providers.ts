@@ -273,3 +273,41 @@ export async function completeJSON<T>(
   }
   throw new Error('AI returned invalid JSON after retries');
 }
+
+// ── Vision / Multimodal completion ─────────────────────────────────────────────
+export async function completeVision(
+  provider: ModelProvider,
+  prompt: string,
+  base64Image: string,
+  mimeType: string = 'image/png',
+  maxTokens = 2048,
+): Promise<string> {
+  const b64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+
+  if (provider === 'gemini') {
+    const client = getGemini()!;
+    const model = client.getGenerativeModel({ model: MODELS.gemini.vision });
+    const imageParts = [{ inlineData: { data: b64Data, mimeType } }];
+    const res = await model.generateContent([prompt, ...imageParts]);
+    return res.response.text();
+  }
+  
+  if (provider === 'claude') {
+    const client = getAnthropic()!;
+    const res = await client.messages.create({
+      model: MODELS.claude.vision,
+      max_tokens: maxTokens,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image', source: { type: 'base64', media_type: mimeType as any, data: b64Data } }
+        ]
+      }]
+    });
+    const textBlock = res.content.find(c => c.type === 'text');
+    return textBlock && 'text' in textBlock ? textBlock.text : '';
+  }
+
+  throw new Error(`Vision not supported by provider: ${provider}`);
+}
