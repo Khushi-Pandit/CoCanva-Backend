@@ -26,6 +26,7 @@ const canvasElementSchema = new Schema<ICanvasElementDocument>(
     },
     subtype: { type: String, default: '' },
     shapeType: { type: String, default: 'rectangle' },
+    pageIndex: { type: Number, default: 0 },
 
     // Spatial
     x: { type: Number, default: 0 },
