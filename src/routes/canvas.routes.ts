@@ -13,6 +13,9 @@ const createCanvasSchema = z.object({
   category: z.enum(['flowchart', 'architecture', 'brainstorm', 'wireframe', 'erd', 'other']).optional(),
   settings: z.record(z.unknown()).optional(),
   templateId: z.string().optional(),
+  canvasType: z.enum(['drawing', 'notes', 'diagram']).optional(),
+  pageSize: z.enum(['a4', 'letter', 'a3', 'a5', 'custom']).optional(),
+  pageOrientation: z.enum(['portrait', 'landscape']).optional(),
 });
 
 const updateCanvasSchema = z.object({

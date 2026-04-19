@@ -24,6 +24,7 @@ import annotationRoutes from './routes/annotation.routes';
 import aiRoutes from './routes/ai.routes';
 import searchRoutes from './routes/search.routes';
 import branchRoutes from './routes/branch.routes';
+import pageRoutes from './routes/page.routes';
 
 // Socket
 import { createSocketServer } from './socket/socket.server';
@@ -83,6 +84,7 @@ v1.use(annotationRoutes);
 v1.use(aiRoutes);
 v1.use(searchRoutes);
 v1.use(branchRoutes);
+v1.use(pageRoutes);
 
 app.use('/v1', v1);
 
