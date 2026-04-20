@@ -124,6 +124,7 @@ export function registerVoiceHandler(io: Server, socket: AuthSocket): void {
     transcript: string;
     userName: string;
   }) => {
+    logger.info('voice:transcript_chunk received', { canvasId, pageIndex, transcript: transcript?.substring(0, 50), userName });
     if (!transcript?.trim()) return;
     try {
       const canvas = await CanvasModel.findById(canvasId);
